@@ -88,6 +88,25 @@ HOOKPROC = ctypes.WINFUNCTYPE(
 user32 = ctypes.windll.user32
 kernel32 = ctypes.windll.kernel32
 
+# Without explicit signatures, ctypes defaults restype to c_int (32-bit), which
+# truncates 64-bit HMODULE / HHOOK on x64 Windows and makes SetWindowsHookExW
+# fail with err=126 (ERROR_MOD_NOT_FOUND).
+kernel32.GetModuleHandleW.argtypes = [wintypes.LPCWSTR]
+kernel32.GetModuleHandleW.restype = wintypes.HMODULE
+
+user32.SetWindowsHookExW.argtypes = [
+    ctypes.c_int, HOOKPROC, wintypes.HMODULE, wintypes.DWORD,
+]
+user32.SetWindowsHookExW.restype = wintypes.HHOOK
+
+user32.UnhookWindowsHookEx.argtypes = [wintypes.HHOOK]
+user32.UnhookWindowsHookEx.restype = wintypes.BOOL
+
+user32.CallNextHookEx.argtypes = [
+    wintypes.HHOOK, ctypes.c_int, wintypes.WPARAM, wintypes.LPARAM,
+]
+user32.CallNextHookEx.restype = ctypes.c_long
+
 
 class WindowsMouseHook:
     """Install a low-level mouse hook in a dedicated thread.
