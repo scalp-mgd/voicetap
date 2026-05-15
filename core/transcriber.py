@@ -47,11 +47,39 @@ def _is_hallucination(text: str) -> bool:
     return False
 
 
-def _loud_enough(audio: np.ndarray, threshold: float = 0.005) -> bool:
+def _loud_enough(audio: np.ndarray, threshold: float = 0.0015) -> bool:
+    """RMS-based VAD. Threshold tuned low so quiet/distant speech isn't
+    silently dropped — Whisper can handle very quiet audio after gain
+    normalization, so the only thing we really want to skip here is true
+    silence / mic-off cases."""
     if audio.size == 0:
         return False
     rms = float(np.sqrt(np.mean(np.square(audio.astype(np.float32)))))
     return rms >= threshold
+
+
+def _normalize_audio(audio: np.ndarray, target_peak: float = 0.8) -> np.ndarray:
+    """Auto-gain: scale audio so its loudest sample sits near target_peak.
+
+    Whisper transcribes much better when input is at a reasonable volume.
+    Quiet recordings (peak < 0.2) get a multiplier; already-loud ones are
+    left alone. We never amplify what looks like pure silence.
+    """
+    if audio.size == 0:
+        return audio
+    peak = float(np.max(np.abs(audio)))
+    if peak < 0.005:
+        # Essentially silent — amplifying just multiplies noise.
+        return audio
+    if peak >= target_peak:
+        return audio
+    gain = target_peak / peak
+    # Cap the gain so room noise doesn't get blasted to clipping levels.
+    gain = min(gain, 25.0)
+    boosted = np.clip(audio * gain, -1.0, 1.0)
+    logger.info("Auto-gain x%.1f applied (peak %.3f -> %.3f)",
+                gain, peak, float(np.max(np.abs(boosted))))
+    return boosted
 
 
 _POST_EDIT_SYSTEM = """Ты — редактор сырого голосового ввода. На вход приходит расшифровка от Whisper (русский, английский или смешанная речь).
@@ -111,6 +139,10 @@ class GroqTranscriber:
         if not _loud_enough(audio):
             logger.info("Audio too quiet, skipping")
             return ""
+
+        # Auto-gain so Whisper gets a properly-leveled clip even when the
+        # user is far from the mic or speaking softly.
+        audio = _normalize_audio(audio)
 
         wav_bytes = _to_wav_bytes(audio, sample_rate)
         logger.info("Sending %.1fs audio to Whisper (%s)...", duration, self._stt_model)

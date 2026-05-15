@@ -28,6 +28,7 @@ import sys
 import threading
 import time
 import tkinter as tk
+from datetime import datetime
 from pathlib import Path
 
 import yaml
@@ -64,12 +65,35 @@ from ui.popup import NearCursorPopup
 
 ROOT = Path(__file__).parent
 CONFIG_PATH = ROOT / "config.yaml"
+LOG_DIR = ROOT / "logs"
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
-    datefmt="%H:%M:%S",
-)
+
+def setup_logging():
+    """Console + rotating-per-day file log. Same format both places."""
+    LOG_DIR.mkdir(exist_ok=True)
+    log_path = LOG_DIR / f"voicetap-{datetime.now().strftime('%Y-%m-%d')}.log"
+
+    fmt = logging.Formatter(
+        fmt="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+        datefmt="%H:%M:%S",
+    )
+    root = logging.getLogger()
+    root.setLevel(logging.INFO)
+    for h in list(root.handlers):
+        root.removeHandler(h)
+
+    console = logging.StreamHandler(sys.stdout)
+    console.setFormatter(fmt)
+    root.addHandler(console)
+
+    file_h = logging.FileHandler(log_path, mode="a", encoding="utf-8")
+    file_h.setFormatter(fmt)
+    root.addHandler(file_h)
+
+    logging.getLogger(__name__).info("Logging to %s", log_path)
+
+
+setup_logging()
 logger = logging.getLogger(__name__)
 
 
