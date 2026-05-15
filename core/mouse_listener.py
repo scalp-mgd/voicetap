@@ -1,36 +1,33 @@
-"""Global mouse listener — fires a callback when the configured side button
-is pressed. Implements toggle and hold modes.
+"""Global mouse hotkey listener with optional event suppression.
 
-Uses pynput.mouse.Listener which works on Windows, macOS, and X11/Linux.
-On macOS the user has to grant Accessibility permission to the running
-process (System Settings -> Privacy & Security -> Accessibility).
+On Windows, suppression is needed because the browser/OS interprets the side
+buttons as Back/Forward navigation by default. We install a low-level mouse
+hook (WH_MOUSE_LL) which can EAT the event before the focused application
+sees it. See core.windows_mouse_hook for the gory details.
+
+On macOS and Linux we fall back to pynput's observe-only listener (no
+suppression). macOS requires Accessibility permission for the running
+process; without it, pynput sees nothing.
 """
 
 from __future__ import annotations
 
 import logging
+import platform
 from typing import Callable, Optional
-
-from pynput import mouse
 
 logger = logging.getLogger(__name__)
 
-# Map config strings to pynput Button enum
-_BUTTON_MAP = {
-    "x1": mouse.Button.x1,        # back / thumb button
-    "x2": mouse.Button.x2,        # forward button
-    "middle": mouse.Button.middle,
-    "left": mouse.Button.left,    # for debugging only
-    "right": mouse.Button.right,
-}
+_SYSTEM = platform.system()
 
 
 class MouseHotkeyListener:
-    """Listens for the configured mouse button.
+    """Listens for the configured mouse button and fires on_toggle (or
+    on_press / on_release in hold mode).
 
-    Modes:
-      - "toggle": each press fires on_toggle().
-      - "hold": press fires on_press(), release fires on_release().
+    On Windows, set suppress_default=True to prevent the button from also
+    doing whatever the OS normally does with it (Back/Forward in browsers,
+    etc.).
     """
 
     def __init__(
@@ -40,39 +37,95 @@ class MouseHotkeyListener:
         on_toggle: Optional[Callable[[int, int], None]] = None,
         on_press: Optional[Callable[[int, int], None]] = None,
         on_release: Optional[Callable[[int, int], None]] = None,
+        suppress_default: bool = True,
     ):
-        if button not in _BUTTON_MAP:
-            raise ValueError(f"Unknown button {button!r}; expected one of {list(_BUTTON_MAP)}")
-        self._target = _BUTTON_MAP[button]
-        self._button_name = button
-        self._mode = mode
-        self._on_toggle = on_toggle
-        self._on_press = on_press
-        self._on_release = on_release
-        self._listener: Optional[mouse.Listener] = None
+        self.button = button
+        self.mode = mode
+        self.on_toggle = on_toggle
+        self.on_press = on_press
+        self.on_release = on_release
+        self.suppress_default = suppress_default
 
-    def _handler(self, x: int, y: int, button, pressed: bool):
-        if button != self._target:
-            return
-        if self._mode == "toggle":
-            if pressed and self._on_toggle:
-                logger.debug("toggle fired at (%d, %d)", x, y)
-                self._on_toggle(x, y)
-        elif self._mode == "hold":
-            if pressed and self._on_press:
-                self._on_press(x, y)
-            elif not pressed and self._on_release:
-                self._on_release(x, y)
+        self._impl = None  # filled in start()
+
+    # ------------------------------------------------------------------ helpers
+
+    def _toggle_handler(self, x: int, y: int):
+        if self.on_toggle:
+            self.on_toggle(x, y)
+
+    def _press_handler(self, x: int, y: int):
+        if self.on_press:
+            self.on_press(x, y)
+
+    def _release_handler(self, x: int, y: int):
+        if self.on_release:
+            self.on_release(x, y)
+
+    # ------------------------------------------------------------------ lifecycle
 
     def start(self):
-        if self._listener is not None:
+        if self._impl is not None:
             return
-        self._listener = mouse.Listener(on_click=self._handler)
-        self._listener.start()
-        logger.info("Mouse listener started (button=%s, mode=%s)", self._button_name, self._mode)
+
+        if _SYSTEM == "Windows":
+            # Low-level hook supports event suppression
+            from core.windows_mouse_hook import WindowsMouseHook
+            if self.mode == "toggle":
+                on_press_cb = self._toggle_handler
+            else:
+                # hold mode: WindowsMouseHook only fires on press currently,
+                # which is fine for toggle. For hold we still need both edges.
+                on_press_cb = self._press_handler
+            self._impl = WindowsMouseHook(
+                button=self.button,
+                on_press=on_press_cb,
+                suppress_default=self.suppress_default,
+            )
+            self._impl.start()
+            if self.mode == "hold":
+                logger.warning(
+                    "hold mode is not fully supported with Windows low-level hook; "
+                    "consider switching to toggle mode."
+                )
+        else:
+            # macOS / Linux: pynput listener, no event suppression
+            from pynput import mouse as pmouse
+            _BUTTON_MAP = {
+                "x1": pmouse.Button.x1,
+                "x2": pmouse.Button.x2,
+                "middle": pmouse.Button.middle,
+                "left": pmouse.Button.left,
+                "right": pmouse.Button.right,
+            }
+            target = _BUTTON_MAP[self.button]
+
+            def _on_click(x, y, button, pressed):
+                if button != target:
+                    return
+                if self.mode == "toggle":
+                    if pressed:
+                        self._toggle_handler(x, y)
+                else:  # hold
+                    if pressed:
+                        self._press_handler(x, y)
+                    else:
+                        self._release_handler(x, y)
+
+            listener = pmouse.Listener(on_click=_on_click)
+            listener.start()
+            self._impl = listener
+            logger.info(
+                "pynput listener started (button=%s, mode=%s) — note: events "
+                "are not suppressed on this platform.",
+                self.button, self.mode,
+            )
 
     def stop(self):
-        if self._listener is not None:
-            self._listener.stop()
-            self._listener = None
-            logger.info("Mouse listener stopped")
+        if self._impl is None:
+            return
+        try:
+            self._impl.stop()
+        except Exception as e:
+            logger.warning("Listener stop error: %s", e)
+        self._impl = None

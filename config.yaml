@@ -5,8 +5,13 @@ hotkey:
   # x1 = back button (closer to thumb), x2 = forward button.
   button: "x1"
   # Trigger mode: "toggle" (click start, click stop) or "hold" (press start,
-  # release stop). User picked toggle.
+  # release stop).
   mode: "toggle"
+  # When true (Windows only): the configured button stops doing its OS-default
+  # action while voicetap is running. So XButton1 no longer triggers browser
+  # "Back" — the press is consumed by voicetap. Set false to keep both
+  # behaviours (Back navigation + voicetap fires on the same press).
+  suppress_default: true
 
 audio:
   sample_rate: 16000

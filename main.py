@@ -147,6 +147,7 @@ class VoicetapApp:
             button=hotkey_cfg.get("button", "x1"),
             mode=hotkey_cfg.get("mode", "toggle"),
             on_toggle=self._on_toggle,
+            suppress_default=hotkey_cfg.get("suppress_default", True),
         )
 
         # Prevent double-triggering and overlapping transcriptions
