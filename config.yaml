@@ -1,0 +1,54 @@
+# voicetap — push-to-talk dictation via side mouse button
+
+hotkey:
+  # Side button to toggle recording. Options: x1 / x2 / middle.
+  # x1 = back button (closer to thumb), x2 = forward button.
+  button: "x1"
+  # Trigger mode: "toggle" (click start, click stop) or "hold" (press start,
+  # release stop). User picked toggle.
+  mode: "toggle"
+
+audio:
+  sample_rate: 16000
+  device: null         # null = system default microphone
+
+stt:
+  provider: "groq"
+  model: "whisper-large-v3-turbo"
+  # Leave null to let Whisper auto-detect language each clip — better for
+  # mid-sentence RU/EN switches than locking to "ru".
+  language: null
+  # Initial prompt — biases Whisper toward your specific vocabulary
+  # (project names, technical terms). Helps with proper nouns it might
+  # otherwise mis-spell or translate.
+  initial_prompt: "Проекты Anton: AEGIS, PROCUROR, MoneyXP, ADAM, ScalpNeural, NekoRay, Remote Hand Control, Voice Reader. Технические термины: Python, Groq, Whisper, MediaPipe, ONNX, OpenAI, Anthropic, GitHub, Docker, n8n, Obsidian, Tkinter, vibe-coding, prompt engineering."
+
+post_edit:
+  # After Whisper transcription, pass the text through an LLM to clean up
+  # filler words, fix punctuation, and normalize transliteration. This is
+  # what makes Whispr Flow feel polished — same trick.
+  enabled: true
+  model: "llama-3.3-70b-versatile"
+  # Free tier: 30 req/min, 14400 req/day — plenty for personal dictation.
+  temperature: 0.1
+  max_tokens: 2048
+
+popup:
+  # Near-cursor recording indicator
+  width: 200
+  height: 60
+  offset_x: 20         # pixels right of cursor
+  offset_y: 20         # pixels below cursor
+  bg_color: "#1a1a1a"
+  text_color: "#ffffff"
+  recording_color: "#ff3030"
+  transcribing_color: "#ffaa00"
+  done_color: "#30ff60"
+
+text_input:
+  # How transcribed text is inserted. "clipboard" copies + sends paste hotkey
+  # (works in all apps). "type" types it character-by-character (slower but
+  # works in apps that block paste).
+  method: "clipboard"
+  # Append a trailing space so subsequent dictations don't glue together.
+  trailing_space: true

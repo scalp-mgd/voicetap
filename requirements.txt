@@ -1,0 +1,19 @@
+# Audio capture
+sounddevice>=0.4.6
+numpy>=1.24.0
+
+# Cloud STT + LLM post-edit (both via Groq)
+groq>=0.11.0
+python-dotenv>=1.0.0
+
+# Mouse listener (global hotkey on side button)
+pynput>=1.7.6
+
+# Clipboard for cross-platform paste
+pyperclip>=1.8.2
+
+# macOS / Linux paste fallback (Cmd+V / Ctrl+V via keyboard automation)
+pyautogui>=0.9.54
+
+# Config
+pyyaml>=6.0
