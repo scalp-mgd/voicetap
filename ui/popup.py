@@ -13,11 +13,57 @@ can invoke them from any thread.
 from __future__ import annotations
 
 import logging
+import sys
 import time
 import tkinter as tk
 from typing import Optional
 
 logger = logging.getLogger(__name__)
+
+
+# Tk's winfo_screenwidth/height returns only the primary monitor on Windows.
+# Clamping popup coords against those bounds drags the popup back onto monitor 1
+# whenever the cursor lives on a different display (especially monitors at
+# negative virtual coords). Ask Win32 which monitor the cursor is on instead.
+
+_WIN_MONITOR_BOUNDS_FOR_POINT = None
+
+if sys.platform == "win32":
+    try:
+        import ctypes
+        from ctypes import wintypes
+
+        class _POINT(ctypes.Structure):
+            _fields_ = [("x", wintypes.LONG), ("y", wintypes.LONG)]
+
+        class _RECT(ctypes.Structure):
+            _fields_ = [("left", wintypes.LONG), ("top", wintypes.LONG),
+                        ("right", wintypes.LONG), ("bottom", wintypes.LONG)]
+
+        class _MONITORINFO(ctypes.Structure):
+            _fields_ = [("cbSize", wintypes.DWORD), ("rcMonitor", _RECT),
+                        ("rcWork", _RECT), ("dwFlags", wintypes.DWORD)]
+
+        _u32 = ctypes.windll.user32
+        _u32.MonitorFromPoint.argtypes = [_POINT, wintypes.DWORD]
+        _u32.MonitorFromPoint.restype = ctypes.c_void_p
+        _u32.GetMonitorInfoW.argtypes = [ctypes.c_void_p, ctypes.POINTER(_MONITORINFO)]
+        _u32.GetMonitorInfoW.restype = wintypes.BOOL
+
+        _MONITOR_DEFAULTTONEAREST = 2
+
+        def _win_monitor_bounds_for_point(x, y):
+            hmon = _u32.MonitorFromPoint(_POINT(x, y), _MONITOR_DEFAULTTONEAREST)
+            info = _MONITORINFO()
+            info.cbSize = ctypes.sizeof(_MONITORINFO)
+            if _u32.GetMonitorInfoW(hmon, ctypes.byref(info)):
+                r = info.rcMonitor
+                return (r.left, r.top, r.right, r.bottom)
+            return None
+
+        _WIN_MONITOR_BOUNDS_FOR_POINT = _win_monitor_bounds_for_point
+    except Exception as e:
+        logger.warning("Win32 monitor helpers unavailable: %s", e)
 
 
 class NearCursorPopup:
@@ -113,19 +159,27 @@ class NearCursorPopup:
     # ------------------------------------------------------------------ internal
 
     def _position_near(self, x: int, y: int):
-        screen_w = self.win.winfo_screenwidth()
-        screen_h = self.win.winfo_screenheight()
+        # Bound to the monitor the cursor is on (multi-monitor support).
+        bounds = _WIN_MONITOR_BOUNDS_FOR_POINT(x, y) if _WIN_MONITOR_BOUNDS_FOR_POINT else None
+        if bounds is None:
+            left, top = 0, 0
+            right = self.win.winfo_screenwidth()
+            bottom = self.win.winfo_screenheight()
+        else:
+            left, top, right, bottom = bounds
+
         px = x + self.offset_x
         py = y + self.offset_y
-        # Keep popup on-screen
-        if px + self.width > screen_w:
+        # Flip to the opposite side of the cursor if popup would extend past the edge
+        if px + self.width > right:
             px = x - self.width - self.offset_x
-        if py + self.height > screen_h:
+        if py + self.height > bottom:
             py = y - self.height - self.offset_y
-        if px < 0:
-            px = 0
-        if py < 0:
-            py = 0
+        # Clamp to monitor's top-left
+        if px < left:
+            px = left
+        if py < top:
+            py = top
         self.win.geometry(f"{self.width}x{self.height}+{px}+{py}")
 
     def _cancel_jobs(self):
