@@ -48,6 +48,21 @@ post_edit:
   temperature: 0.1
   max_tokens: 2048
 
+command_mode:
+  # Second hotkey for "rewrite selection by voice". Select text in any app,
+  # press the command button, speak the instruction ("переведи на английский",
+  # "make formal", "fix grammar", "сделай буллетами"), press again, the
+  # rewritten text replaces your selection.
+  enabled: true
+  button: "x2"           # forward / second thumb button
+  mode: "toggle"
+  suppress_default: true # don't let the browser navigate Forward on this press
+  # Smarter model than post_edit because rewrites need real understanding,
+  # not just minimal cleanup. Sonnet 4.6 handles complex instructions well.
+  model: "anthropic/claude-sonnet-4.6"
+  temperature: 0.3       # a touch higher than post-edit — rewrites allow latitude
+  max_tokens: 4096
+
 popup:
   # Near-cursor recording indicator
   width: 200
@@ -57,6 +72,7 @@ popup:
   bg_color: "#1a1a1a"
   text_color: "#ffffff"
   recording_color: "#ff3030"
+  command_color: "#ff9030"  # orange — distinguishes command mode from dictate
   transcribing_color: "#ffaa00"
   done_color: "#30ff60"
 

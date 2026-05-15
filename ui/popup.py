@@ -69,6 +69,7 @@ if sys.platform == "win32":
 class NearCursorPopup:
     STATE_HIDDEN = "hidden"
     STATE_RECORDING = "recording"
+    STATE_COMMAND_RECORDING = "command_recording"
     STATE_TRANSCRIBING = "transcribing"
     STATE_DONE = "done"
     STATE_ERROR = "error"
@@ -83,6 +84,7 @@ class NearCursorPopup:
         bg_color: str = "#1a1a1a",
         text_color: str = "#ffffff",
         recording_color: str = "#ff3030",
+        command_color: str = "#ff9030",
         transcribing_color: str = "#ffaa00",
         done_color: str = "#30ff60",
     ):
@@ -94,6 +96,7 @@ class NearCursorPopup:
         self.bg_color = bg_color
         self.text_color = text_color
         self.recording_color = recording_color
+        self.command_color = command_color
         self.transcribing_color = transcribing_color
         self.done_color = done_color
 
@@ -143,6 +146,9 @@ class NearCursorPopup:
 
     def show_recording(self, cursor_x: int, cursor_y: int):
         self.root.after(0, lambda: self._show_recording(cursor_x, cursor_y))
+
+    def show_command_recording(self, cursor_x: int, cursor_y: int):
+        self.root.after(0, lambda: self._show_command_recording(cursor_x, cursor_y))
 
     def show_transcribing(self):
         self.root.after(0, self._show_transcribing)
@@ -202,6 +208,18 @@ class NearCursorPopup:
         self._blink()
         self._tick_timer()
 
+    def _show_command_recording(self, x: int, y: int):
+        self._cancel_jobs()
+        self.state = self.STATE_COMMAND_RECORDING
+        self._recording_start = time.time()
+        self._position_near(x, y)
+        self.canvas.itemconfig(self._dot, fill=self.command_color)
+        self.label_status.configure(text="CMD", fg=self.text_color)
+        self.label_timer.configure(text="0:00")
+        self.win.deiconify()
+        self._blink()
+        self._tick_timer()
+
     def _show_transcribing(self):
         self._cancel_jobs()
         self.state = self.STATE_TRANSCRIBING
@@ -237,15 +255,19 @@ class NearCursorPopup:
     # ------------------------------------------------------------------ animations
 
     def _blink(self):
-        if self.state != self.STATE_RECORDING:
+        if self.state == self.STATE_RECORDING:
+            active = self.recording_color
+        elif self.state == self.STATE_COMMAND_RECORDING:
+            active = self.command_color
+        else:
             return
         self._blink_on = not self._blink_on
-        color = self.recording_color if self._blink_on else self.bg_color
+        color = active if self._blink_on else self.bg_color
         self.canvas.itemconfig(self._dot, fill=color)
         self._blink_job = self.root.after(450, self._blink)
 
     def _tick_timer(self):
-        if self.state != self.STATE_RECORDING:
+        if self.state not in (self.STATE_RECORDING, self.STATE_COMMAND_RECORDING):
             return
         elapsed = time.time() - self._recording_start
         m = int(elapsed) // 60

@@ -59,7 +59,7 @@ _make_dpi_aware()
 
 from core.audio_recorder import AudioRecorder
 from core.mouse_listener import MouseHotkeyListener
-from core.text_inserter import insert_text
+from core.text_inserter import capture_selection, insert_text
 from core.transcriber import GroqTranscriber
 from ui.popup import NearCursorPopup
 
@@ -115,6 +115,7 @@ class VoicetapApp:
 
         stt_cfg = cfg.get("stt", {})
         post_cfg = cfg.get("post_edit", {})
+        cmd_cfg = cfg.get("command_mode", {})
         self.transcriber = GroqTranscriber(
             stt_model=stt_cfg.get("model", "whisper-large-v3-turbo"),
             language=stt_cfg.get("language"),
@@ -124,6 +125,9 @@ class VoicetapApp:
             post_edit_model=post_cfg.get("model", "anthropic/claude-haiku-4.5"),
             post_edit_temperature=post_cfg.get("temperature", 0.1),
             post_edit_max_tokens=post_cfg.get("max_tokens", 2048),
+            command_model=cmd_cfg.get("model", "anthropic/claude-sonnet-4.6"),
+            command_temperature=cmd_cfg.get("temperature", 0.3),
+            command_max_tokens=cmd_cfg.get("max_tokens", 4096),
         )
 
         popup_cfg = cfg.get("popup", {})
@@ -136,6 +140,7 @@ class VoicetapApp:
             bg_color=popup_cfg.get("bg_color", "#1a1a1a"),
             text_color=popup_cfg.get("text_color", "#ffffff"),
             recording_color=popup_cfg.get("recording_color", "#ff3030"),
+            command_color=popup_cfg.get("command_color", "#ff9030"),
             transcribing_color=popup_cfg.get("transcribing_color", "#ffaa00"),
             done_color=popup_cfg.get("done_color", "#30ff60"),
         )
@@ -151,23 +156,41 @@ class VoicetapApp:
             suppress_default=hotkey_cfg.get("suppress_default", True),
         )
 
-        # Prevent double-triggering and overlapping transcriptions
+        # Second listener for Command Mode (rewrite selection by voice).
+        # Independent low-level hook so its button is suppressed independently
+        # of the dictation button.
+        self._command_enabled = cmd_cfg.get("enabled", False)
+        if self._command_enabled:
+            self.cmd_mouse = MouseHotkeyListener(
+                button=cmd_cfg.get("button", "x2"),
+                mode=cmd_cfg.get("mode", "toggle"),
+                on_toggle=self._on_command_toggle,
+                suppress_default=cmd_cfg.get("suppress_default", True),
+            )
+        else:
+            self.cmd_mouse = None
+
+        # Lock guards mode transitions; flag tracks whether the active
+        # recording (if any) is a command rather than a regular dictation.
         self._busy_lock = threading.Lock()
         self._transcribing = False
+        self._command_mode = False
+        self._command_selection = ""
 
-    # ------------------------------------------------------------------ hotkey
+    # ------------------------------------------------------------------ hotkey: dictate (x1)
 
     def _on_toggle(self, x: int, y: int):
-        """Called from the pynput listener thread on each side-button press."""
+        """Called on each dictation-button press."""
         with self._busy_lock:
             if self._transcribing:
-                logger.info("Ignored press: previous transcription still in progress")
+                logger.info("Ignored x1: previous transcription in progress")
                 return
             if self.recorder.is_recording:
-                # Second press: stop and transcribe
+                if self._command_mode:
+                    logger.info("Ignored x1: currently in command-mode recording")
+                    return
                 self._stop_and_transcribe()
             else:
-                # First press: start
                 self._start_recording(x, y)
 
     def _start_recording(self, x: int, y: int):
@@ -177,6 +200,7 @@ class VoicetapApp:
             logger.error("Failed to start recording: %s", e)
             self.popup.show_error("Mic error")
             return
+        self._command_mode = False
         self.popup.show_recording(x, y)
 
     def _stop_and_transcribe(self):
@@ -205,6 +229,72 @@ class VoicetapApp:
 
         threading.Thread(target=_worker, daemon=True).start()
 
+    # ------------------------------------------------------------------ hotkey: command (x2)
+
+    def _on_command_toggle(self, x: int, y: int):
+        """Called on each command-button press."""
+        with self._busy_lock:
+            if self._transcribing:
+                logger.info("Ignored x2: previous transcription in progress")
+                return
+            if self.recorder.is_recording:
+                if not self._command_mode:
+                    logger.info("Ignored x2: currently in dictation recording")
+                    return
+                self._stop_and_rewrite()
+            else:
+                self._start_command_recording(x, y)
+
+    def _start_command_recording(self, x: int, y: int):
+        selection = capture_selection()
+        if not selection:
+            logger.info("Command Mode: no text selected")
+            self.popup.show_error("Выдели текст")
+            return
+        logger.info("Command Mode: captured %d chars of selection", len(selection))
+        self._command_selection = selection
+        try:
+            self.recorder.start()
+        except Exception as e:
+            logger.error("Failed to start recording: %s", e)
+            self.popup.show_error("Mic error")
+            self._command_selection = ""
+            return
+        self._command_mode = True
+        self.popup.show_command_recording(x, y)
+
+    def _stop_and_rewrite(self):
+        audio = self.recorder.stop()
+        self.popup.show_transcribing()
+        self._transcribing = True
+        selection = self._command_selection
+        self._command_selection = ""
+        self._command_mode = False
+
+        def _worker():
+            try:
+                rewritten = self.transcriber.rewrite(
+                    audio, selection, sample_rate=self.recorder.sample_rate,
+                )
+                if not rewritten:
+                    logger.info("Rewrite returned empty, leaving selection alone")
+                    self.popup.show_error("(empty)")
+                    return
+                # Selection is still highlighted in the source app — Ctrl+V
+                # replaces it with the rewrite.
+                insert_text(rewritten)
+                logger.info("Rewrote selection (%d -> %d chars)",
+                            len(selection), len(rewritten))
+                self.popup.show_done()
+            except Exception as e:
+                logger.error("Rewrite pipeline failed: %s", e)
+                self.popup.show_error("Failed")
+            finally:
+                with self._busy_lock:
+                    self._transcribing = False
+
+        threading.Thread(target=_worker, daemon=True).start()
+
     # ------------------------------------------------------------------ lifecycle
 
     def start(self):
@@ -215,11 +305,20 @@ class VoicetapApp:
             hotkey_cfg.get("button", "x1"),
             hotkey_cfg.get("mode", "toggle"),
         )
+        if self.cmd_mouse:
+            self.cmd_mouse.start()
+            cmd_cfg = self.cfg.get("command_mode", {})
+            logger.info(
+                "Command Mode ready. Select text, press %s to rewrite by voice.",
+                cmd_cfg.get("button", "x2"),
+            )
 
     def stop(self):
         if self.recorder.is_recording:
             self.recorder.stop()
         self.mouse.stop()
+        if self.cmd_mouse:
+            self.cmd_mouse.stop()
 
 
 def main():

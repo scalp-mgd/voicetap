@@ -129,6 +129,24 @@ _POST_EDIT_SYSTEM = """Ты — ФИЛЬТР для очистки сырой Wh
 """
 
 
+_COMMAND_SYSTEM = """Ты переписываешь текст по голосовой инструкции пользователя.
+
+ВХОД:
+<text>выделенный пользователем текст</text>
+<instruction>голосовая команда — что с ним сделать</instruction>
+
+ВЫХОД: переписанный текст. ТОЛЬКО он. Без комментариев, без кавычек вокруг, без префиксов вроде "Вот результат:", без блоков кода если их не было в исходном тексте.
+
+Правила:
+- Делай РОВНО то, что просит инструкция. "Переведи на английский" — переведи. "Сделай формально" — смени тон. "Исправь грамматику" — только грамматику, остальное не трогать. "Сделай буллетами" — буллет-лист. "Расширь" — добавь деталей. "Сократи" — сожми.
+- Сохраняй смысл. Переписанный текст должен значить то же самое, просто трансформированный по инструкции.
+- Сохраняй форматирование (markdown, code blocks, отступы) если инструкция явно не просит его изменить.
+- Язык вывода: если инструкция явно не указывает другой — оставь язык исходного текста.
+- Если инструкция бессмысленна или текст пустой — верни исходный текст без изменений.
+- Никаких мета-комментариев ("Вот ваш переписанный текст:", "Если нужны правки — скажите"). Только raw output, готовый к вставке.
+"""
+
+
 def _new_word_ratio(raw: str, edited: str) -> float:
     """Fraction of edited tokens that don't appear in the raw input.
 
@@ -164,6 +182,9 @@ class GroqTranscriber:
         post_edit_model: str = "anthropic/claude-haiku-4.5",
         post_edit_temperature: float = 0.1,
         post_edit_max_tokens: int = 2048,
+        command_model: str = "anthropic/claude-sonnet-4.6",
+        command_temperature: float = 0.3,
+        command_max_tokens: int = 4096,
     ):
         api_key = api_key or os.environ.get("GROQ_API_KEY")
         if not api_key:
@@ -181,6 +202,9 @@ class GroqTranscriber:
         self._post_edit_model = post_edit_model
         self._post_edit_temp = post_edit_temperature
         self._post_edit_max_tokens = post_edit_max_tokens
+        self._command_model = command_model
+        self._command_temp = command_temperature
+        self._command_max_tokens = command_max_tokens
         self._post_edit_client = self._make_post_edit_client()
 
     def _make_post_edit_client(self):
@@ -309,6 +333,77 @@ class GroqTranscriber:
             )
             return ""
         return content
+
+    # ------------------------------------------------------------------ Command Mode
+
+    def rewrite(self, audio: np.ndarray, selection: str, sample_rate: int = 16000) -> str:
+        """Transcribe a voice command, apply it to selected text, return the rewrite.
+
+        Returns "" on any failure (empty audio, transcription error, LLM error,
+        empty LLM response) so the caller can leave the selection untouched.
+        Post-edit pipeline is skipped — for commands we want the raw Whisper
+        instruction, not a "cleaned" version.
+        """
+        if audio is None or audio.size == 0:
+            return ""
+        duration = len(audio) / sample_rate
+        if duration < 0.3:
+            logger.info("Command audio too short (%.2fs), skipping", duration)
+            return ""
+        if not _loud_enough(audio):
+            logger.info("Command audio too quiet, skipping")
+            return ""
+
+        audio = _normalize_audio(audio)
+        wav_bytes = _to_wav_bytes(audio, sample_rate)
+        logger.info("Sending %.1fs command audio to Whisper...", duration)
+
+        kwargs = {
+            "file": ("audio.wav", wav_bytes),
+            "model": self._stt_model,
+            "response_format": "text",
+        }
+        if self._language:
+            kwargs["language"] = self._language
+
+        try:
+            result = self._client.audio.transcriptions.create(**kwargs)
+        except Exception as e:
+            logger.error("Whisper failed for command: %s", e)
+            return ""
+
+        instruction = (result if isinstance(result, str) else getattr(result, "text", "")).strip()
+        if not instruction or _is_hallucination(instruction):
+            logger.info("Command transcription empty / hallucinated, skipping")
+            return ""
+
+        logger.info("Command: %s", instruction[:120])
+
+        if not self._post_edit_client:
+            logger.warning("Command Mode needs a chat LLM but none is configured")
+            return ""
+
+        user_msg = f"<text>{selection}</text>\n<instruction>{instruction}</instruction>"
+        try:
+            resp = self._post_edit_client.chat.completions.create(
+                model=self._command_model,
+                temperature=self._command_temp,
+                max_tokens=self._command_max_tokens,
+                messages=[
+                    {"role": "system", "content": _COMMAND_SYSTEM},
+                    {"role": "user", "content": user_msg},
+                ],
+            )
+            rewritten = (resp.choices[0].message.content or "").strip()
+        except Exception as e:
+            logger.error("Rewrite LLM call failed: %s", e)
+            return ""
+
+        if not rewritten:
+            return ""
+        logger.info("Rewrote %d chars -> %d chars (model=%s)",
+                    len(selection), len(rewritten), self._command_model)
+        return rewritten
 
 
 # ---------------------------------------------------------------------- helpers
