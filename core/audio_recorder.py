@@ -49,6 +49,14 @@ class AudioRecorder:
         if self._recording.is_set():
             logger.warning("start() while already recording")
             return
+        # Log which device we're about to use so device-selection bugs are
+        # visible at-a-glance.
+        try:
+            info = sd.query_devices(self._device, "input")
+            logger.info("Recording from: %s @ %d Hz (default sr=%d)",
+                        info["name"], self._sample_rate, int(info["default_samplerate"]))
+        except Exception as e:
+            logger.warning("Could not query input device %r: %s", self._device, e)
         with self._chunks_lock:
             self._chunks.clear()
         self._recording.set()
@@ -76,8 +84,15 @@ class AudioRecorder:
             self._stream = None
         with self._chunks_lock:
             if not self._chunks:
+                logger.warning("stop() called but no audio chunks captured (callback never fired?)")
                 return np.array([], dtype=np.float32)
             audio = np.concatenate(self._chunks, axis=0).flatten().astype(np.float32)
             self._chunks.clear()
-        logger.info("Recording stopped (%.2fs)", len(audio) / self._sample_rate)
+        # Report level so silence-vs-mute issues are obvious in the log
+        rms = float(np.sqrt(np.mean(np.square(audio)))) if audio.size else 0.0
+        peak = float(np.max(np.abs(audio))) if audio.size else 0.0
+        logger.info(
+            "Recording stopped (%.2fs, rms=%.4f, peak=%.4f)",
+            len(audio) / self._sample_rate, rms, peak,
+        )
         return audio

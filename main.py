@@ -23,6 +23,7 @@ All cross-thread UI updates are funneled through `root.after(...)`.
 """
 
 import logging
+import platform
 import sys
 import threading
 import time
@@ -31,6 +32,29 @@ from pathlib import Path
 
 import yaml
 from dotenv import load_dotenv
+
+
+def _make_dpi_aware():
+    """Tell Windows this process knows about DPI scaling.
+
+    Without this call, mouse coordinates from pynput and window coordinates in
+    Tkinter use different units when display scaling is set to anything other
+    than 100% — the popup ends up far from the cursor.
+    """
+    if platform.system() != "Windows":
+        return
+    try:
+        import ctypes
+        # PROCESS_PER_MONITOR_DPI_AWARE = 2 (Windows 8.1+, recommended)
+        ctypes.windll.shcore.SetProcessDpiAwareness(2)
+    except (OSError, AttributeError):
+        try:
+            ctypes.windll.user32.SetProcessDPIAware()
+        except Exception:
+            pass
+
+
+_make_dpi_aware()
 
 from core.audio_recorder import AudioRecorder
 from core.mouse_listener import MouseHotkeyListener
