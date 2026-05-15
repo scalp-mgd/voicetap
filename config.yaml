@@ -33,8 +33,18 @@ post_edit:
   # filler words, fix punctuation, and normalize transliteration. This is
   # what makes Whispr Flow feel polished — same trick.
   enabled: true
-  model: "llama-3.3-70b-versatile"
-  # Free tier: 30 req/min, 14400 req/day — plenty for personal dictation.
+  # Provider: "openrouter" (default — Claude Haiku, smartest at strict
+  # editing without paraphrasing) or "groq" (free Llama 3.3, paraphrases
+  # more on chat-like inputs but no extra API key needed).
+  provider: "openrouter"
+  # Model id for the chosen provider. Examples:
+  #   openrouter: anthropic/claude-haiku-4.5    (default, fast + smart)
+  #               anthropic/claude-sonnet-4.6   (smarter, slightly slower)
+  #               google/gemini-flash-latest    (cheapest, also fast)
+  #   groq:       llama-3.3-70b-versatile       (free tier, less strict)
+  model: "anthropic/claude-haiku-4.5"
+  # Lower = more deterministic / literal. 0.0–0.2 is the right range for
+  # strict editing; higher invites paraphrasing.
   temperature: 0.1
   max_tokens: 2048
 

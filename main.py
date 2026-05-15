@@ -120,7 +120,8 @@ class VoicetapApp:
             language=stt_cfg.get("language"),
             initial_prompt=stt_cfg.get("initial_prompt"),
             post_edit_enabled=post_cfg.get("enabled", True),
-            post_edit_model=post_cfg.get("model", "llama-3.3-70b-versatile"),
+            post_edit_provider=post_cfg.get("provider", "openrouter"),
+            post_edit_model=post_cfg.get("model", "anthropic/claude-haiku-4.5"),
             post_edit_temperature=post_cfg.get("temperature", 0.1),
             post_edit_max_tokens=post_cfg.get("max_tokens", 2048),
         )
